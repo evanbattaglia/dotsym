@@ -24,21 +24,31 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
     - name: Install cross-compilation tools
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu
+        sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools
 
     - name: Setup Android NDK for cross-compilation
       if: matrix.target == 'aarch64-linux-android'
       run: |
-        wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
-        unzip -q android-ndk-r25c-linux.zip
-        export ANDROID_NDK_ROOT=$(pwd)/android-ndk-r25c
+        wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+        unzip -q android-ndk-r26d-linux.zip
+        export ANDROID_NDK_ROOT=$(pwd)/android-ndk-r26d
         echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
         echo "CC_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" >> $GITHUB_ENV
         echo "AR_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
         echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" >> $GITHUB_ENV
+        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
 
     - name: Build
       run: cargo build --release --target ${{ matrix.target }}
@@ -48,9 +58,7 @@ jobs:
         if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
           strip target/${{ matrix.target }}/release/dotsym
         elif [ "${{ matrix.target }}" = "aarch64-linux-android" ]; then
-          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip target/${{ matrix.target }}/release/dotsym
-        else
-          aarch64-linux-gnu-strip target/${{ matrix.target }}/release/dotsym
+          ${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip target/${{ matrix.target }}/release/dotsym
         fi
         cp target/${{ matrix.target }}/release/dotsym ${{ matrix.name }}
 
