@@ -30,7 +30,30 @@ pub fn apply_command(context: &DotsymContext, dry_run: bool, no_backup_existing_
 
     if dry_run {
         println!();
-        println!("Dry run complete. {} operations would be performed.", operations.len());
+
+        // Count operation types
+        let mut exists_count = 0;
+        let mut create_count = 0;
+        let mut backup_count = 0;
+
+        for operation in &operations {
+            match operation {
+                crate::context::SymlinkOperation::AlreadyExists(_) => exists_count += 1,
+                crate::context::SymlinkOperation::CreateSymlink(_) => create_count += 1,
+                crate::context::SymlinkOperation::CreateWithBackup { .. } => {
+                    create_count += 1;
+                    backup_count += 1;
+                }
+            }
+        }
+
+        println!("Dry run complete:");
+        println!("  {} symlinks already exist (nothing to do)", exists_count);
+        println!("  {} symlinks would be created", create_count);
+        if backup_count > 0 {
+            println!("  {} files/directories would be backed up", backup_count);
+        }
+        println!();
         println!("Run without --dry-run to apply these changes.");
     } else {
         println!();

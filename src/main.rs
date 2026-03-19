@@ -1015,4 +1015,55 @@ dir = "~/dotfiles"
 
         Ok(())
     }
+
+    #[test]
+    fn test_mixed_operations_dry_run() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory with multiple files
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+
+        // File 1: Will be created (doesn't exist)
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+
+        // File 2: Already exists as correct symlink
+        File::create(dotfiles_dir.join("dotsym/__/__vimrc"))?;
+        let home_vimrc = home_dir.path().join(".vimrc");
+        unix_fs::symlink(dotfiles_dir.join("dotsym/__/__vimrc"), &home_vimrc)?;
+
+        // File 3: Exists as regular file (needs backup)
+        File::create(dotfiles_dir.join("dotsym/__/__bashrc"))?;
+        let home_bashrc = home_dir.path().join(".bashrc");
+        fs::write(&home_bashrc, "existing content")?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        let operations = context.apply_symlinks(true, false)?; // dry run
+
+        // Count operation types
+        let mut exists_count = 0;
+        let mut create_count = 0;
+        let mut backup_count = 0;
+
+        for operation in &operations {
+            match operation {
+                crate::context::SymlinkOperation::AlreadyExists(_) => exists_count += 1,
+                crate::context::SymlinkOperation::CreateSymlink(_) => create_count += 1,
+                crate::context::SymlinkOperation::CreateWithBackup { .. } => {
+                    create_count += 1;
+                    backup_count += 1;
+                }
+            }
+        }
+
+        assert_eq!(operations.len(), 3, "Should have 3 total operations");
+        assert_eq!(exists_count, 1, "Should have 1 already-exists operation");
+        assert_eq!(create_count, 2, "Should have 2 create operations");
+        assert_eq!(backup_count, 1, "Should have 1 backup operation");
+
+        Ok(())
+    }
 }
