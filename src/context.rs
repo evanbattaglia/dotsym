@@ -202,11 +202,57 @@ impl DotsymContext {
         }
     }
 
-    pub fn apply_symlinks(&self, dry_run: bool, no_backup_existing_symlinks: bool) -> Result<Vec<SymlinkOperation>, DotsymError> {
+    pub fn filter_mappings(&self, mappings: Vec<SymlinkMapping>, filter_path: Option<&str>) -> Result<Vec<SymlinkMapping>, DotsymError> {
+        let Some(filter) = filter_path else {
+            return Ok(mappings);
+        };
+
+        // Expand the filter path if it starts with ~/
+        let expanded_filter = filter.replace("~/", &format!("{}/", self.home_dir.display()));
+
+        // Determine if this is an absolute or relative path
+        let filter_path_buf = PathBuf::from(&expanded_filter);
+        let config_dir_expanded = self.config.dir.replace("~/", &format!("{}/", self.home_dir.display()));
+        let config_dir = Path::new(&config_dir_expanded);
+
+        // Convert to absolute path if it's relative
+        let absolute_filter = if filter_path_buf.is_absolute() {
+            filter_path_buf
+        } else {
+            config_dir.join(&filter_path_buf)
+        };
+
+        // Normalize the filter path (canonicalize if it exists, otherwise just clean it up)
+        let normalized_filter = if absolute_filter.exists() {
+            absolute_filter.canonicalize().unwrap_or(absolute_filter)
+        } else {
+            absolute_filter
+        };
+
+        // Filter mappings based on whether their destination starts with the filter path
+        let filtered: Vec<SymlinkMapping> = mappings.into_iter()
+            .filter(|mapping| {
+                // Try to canonicalize the destination, fall back to the original path
+                let dest_path = if mapping.destination.exists() {
+                    mapping.destination.canonicalize().unwrap_or_else(|_| mapping.destination.clone())
+                } else {
+                    mapping.destination.clone()
+                };
+
+                // Check if destination starts with the filter path
+                dest_path.starts_with(&normalized_filter)
+            })
+            .collect();
+
+        Ok(filtered)
+    }
+
+    pub fn apply_symlinks(&self, dry_run: bool, no_backup_existing_symlinks: bool, filter_path: Option<&str>) -> Result<Vec<SymlinkOperation>, DotsymError> {
         let mappings = self.get_symlink_mappings()?;
+        let filtered_mappings = self.filter_mappings(mappings, filter_path)?;
         let mut operations = Vec::new();
 
-        for mapping in mappings {
+        for mapping in filtered_mappings {
             let operation = self.analyze_symlink(&mapping, no_backup_existing_symlinks)?;
 
             if dry_run {

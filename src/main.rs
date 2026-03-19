@@ -22,11 +22,11 @@ fn main() -> AnyhowResult<()> {
                 .context("Failed to initialize dotsym context")?;
             preview_command(&context)
         }
-        Commands::Apply { dry_run, no_backup_existing_symlinks } => {
+        Commands::Apply { dry_run, no_backup_existing_symlinks, path } => {
             let config = load_config()?;
             let context = DotsymContext::new(config, None, None)
                 .context("Failed to initialize dotsym context")?;
-            apply_command(&context, dry_run, no_backup_existing_symlinks)
+            apply_command(&context, dry_run, no_backup_existing_symlinks, path)
         }
         Commands::Setup { directory, separator } => {
             setup_command(directory, separator)
@@ -383,7 +383,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true, false)?; // dry run
+        let operations = context.apply_symlinks(true, false, None)?; // dry run
 
         assert_eq!(operations.len(), 1);
         match &operations[0] {
@@ -415,7 +415,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true, false)?; // dry run
+        let operations = context.apply_symlinks(true, false, None)?; // dry run
 
         assert_eq!(operations.len(), 1);
         match &operations[0] {
@@ -448,7 +448,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true, false)?; // dry run
+        let operations = context.apply_symlinks(true, false, None)?; // dry run
 
         assert_eq!(operations.len(), 1);
         match &operations[0] {
@@ -482,7 +482,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true, false)?; // dry run
+        let operations = context.apply_symlinks(true, false, None)?; // dry run
 
         assert_eq!(operations.len(), 1);
         match &operations[0] {
@@ -525,7 +525,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true, false)?; // dry run - should not error
+        let operations = context.apply_symlinks(true, false, None)?; // dry run - should not error
         assert_eq!(operations.len(), 1);
 
         match &operations[0] {
@@ -600,7 +600,7 @@ mod tests {
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
         // Execute apply (not dry run)
-        let operations = context.apply_symlinks(false, false)?;
+        let operations = context.apply_symlinks(false, false, None)?;
 
         assert_eq!(operations.len(), 1);
 
@@ -686,7 +686,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true, false)?; // dry run
+        let operations = context.apply_symlinks(true, false, None)?; // dry run
 
         assert_eq!(operations.len(), 1);
         match &operations[0] {
@@ -720,7 +720,7 @@ mod tests {
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
         // Execute apply (not dry run)
-        let operations = context.apply_symlinks(false, false)?;
+        let operations = context.apply_symlinks(false, false, None)?;
 
         assert_eq!(operations.len(), 1);
 
@@ -1010,7 +1010,7 @@ dir = "~/dotfiles"
         assert!(mappings[0].destination.to_string_lossy().ends_with("__gitconfig"));
 
         // Test that apply works correctly
-        let operations = context.apply_symlinks(true, false)?; // dry run
+        let operations = context.apply_symlinks(true, false, None)?; // dry run
         assert_eq!(operations.len(), 1);
 
         Ok(())
@@ -1041,7 +1041,7 @@ dir = "~/dotfiles"
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true, false)?; // dry run
+        let operations = context.apply_symlinks(true, false, None)?; // dry run
 
         // Count operation types
         let mut exists_count = 0;
@@ -1092,7 +1092,7 @@ dir = "~/dotfiles"
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(false, false)?; // actual run
+        let operations = context.apply_symlinks(false, false, None)?; // actual run
 
         // Count operation types
         let mut exists_count = 0;
@@ -1126,6 +1126,362 @@ dir = "~/dotfiles"
         assert!(backup_bashrc.exists(), "backup should exist");
         let backup_content = fs::read_to_string(&backup_bashrc)?;
         assert_eq!(backup_content, "existing content", "backup should contain original content");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_by_host_directory() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory with multiple host directories
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+        fs::create_dir_all(dotfiles_dir.join("testhost/__"))?;
+
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+        File::create(dotfiles_dir.join("testhost/__/__bashrc"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Filter by dotsym host directory
+        let operations = context.apply_symlinks(true, false, Some("dotsym"))?;
+        assert_eq!(operations.len(), 1, "Should only include mappings from dotsym host directory");
+
+        match &operations[0] {
+            SymlinkOperation::CreateSymlink(mapping) => {
+                assert!(mapping.source.to_string_lossy().ends_with(".gitconfig"));
+            }
+            _ => panic!("Expected CreateSymlink operation"),
+        }
+
+        // Filter by testhost host directory
+        let operations = context.apply_symlinks(true, false, Some("testhost"))?;
+        assert_eq!(operations.len(), 1, "Should only include mappings from testhost host directory");
+
+        match &operations[0] {
+            SymlinkOperation::CreateSymlink(mapping) => {
+                assert!(mapping.source.to_string_lossy().ends_with(".bashrc"));
+            }
+            _ => panic!("Expected CreateSymlink operation"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_by_literal_directory() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory with multiple literal directories
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__config"))?;
+
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+        File::create(dotfiles_dir.join("dotsym/__config/app.conf"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Filter by dotsym/__ literal directory
+        let operations = context.apply_symlinks(true, false, Some("dotsym/__"))?;
+        assert_eq!(operations.len(), 1, "Should only include mappings from dotsym/__ literal directory");
+
+        match &operations[0] {
+            SymlinkOperation::CreateSymlink(mapping) => {
+                assert!(mapping.source.to_string_lossy().ends_with(".gitconfig"));
+            }
+            _ => panic!("Expected CreateSymlink operation"),
+        }
+
+        // Filter by dotsym/__config literal directory
+        let operations = context.apply_symlinks(true, false, Some("dotsym/__config"))?;
+        assert_eq!(operations.len(), 1, "Should only include mappings from dotsym/__config literal directory");
+
+        match &operations[0] {
+            SymlinkOperation::CreateSymlink(mapping) => {
+                assert!(mapping.source.to_string_lossy().ends_with("app.conf"));
+            }
+            _ => panic!("Expected CreateSymlink operation"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_by_specific_symlink() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory with multiple files
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+        File::create(dotfiles_dir.join("dotsym/__/__bashrc"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Filter by specific symlink destination
+        let operations = context.apply_symlinks(true, false, Some("dotsym/__/__gitconfig"))?;
+        assert_eq!(operations.len(), 1, "Should only include the specific symlink");
+
+        match &operations[0] {
+            SymlinkOperation::CreateSymlink(mapping) => {
+                assert!(mapping.source.to_string_lossy().ends_with(".gitconfig"));
+                assert!(mapping.destination.to_string_lossy().ends_with("__gitconfig"));
+            }
+            _ => panic!("Expected CreateSymlink operation"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_with_absolute_path() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+        fs::create_dir_all(dotfiles_dir.join("testhost/__"))?;
+
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+        File::create(dotfiles_dir.join("testhost/__/__bashrc"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Filter using absolute path
+        let absolute_filter = dotfiles_dir.join("dotsym");
+        let operations = context.apply_symlinks(true, false, Some(absolute_filter.to_str().unwrap()))?;
+        assert_eq!(operations.len(), 1, "Should only include mappings from absolute path");
+
+        match &operations[0] {
+            SymlinkOperation::CreateSymlink(mapping) => {
+                assert!(mapping.source.to_string_lossy().ends_with(".gitconfig"));
+            }
+            _ => panic!("Expected CreateSymlink operation"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_no_matches() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Filter by non-existent host directory
+        let operations = context.apply_symlinks(true, false, Some("nonexistent"))?;
+        assert_eq!(operations.len(), 0, "Should return no operations when filter doesn't match");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_with_dry_run() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+        fs::create_dir_all(dotfiles_dir.join("testhost/__"))?;
+
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+        File::create(dotfiles_dir.join("testhost/__/__bashrc"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Dry run with filter
+        let operations = context.apply_symlinks(true, false, Some("dotsym"))?;
+        assert_eq!(operations.len(), 1, "Dry run should work with filter");
+
+        // Verify no files were created
+        let home_gitconfig = home_dir.path().join(".gitconfig");
+        assert!(!home_gitconfig.exists(), "Dry run should not create files");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_with_no_backup_existing_symlinks() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+        fs::create_dir_all(dotfiles_dir.join("testhost/__"))?;
+
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+        File::create(dotfiles_dir.join("testhost/__/__bashrc"))?;
+
+        // Create existing wrong symlink for gitconfig
+        let home_gitconfig = home_dir.path().join(".gitconfig");
+        let wrong_target = temp_dir.path().join("wrong_target");
+        File::create(&wrong_target)?;
+        unix_fs::symlink(&wrong_target, &home_gitconfig)?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Apply with filter and no_backup_existing_symlinks
+        let operations = context.apply_symlinks(true, true, Some("dotsym"))?;
+        assert_eq!(operations.len(), 1, "Should apply filter with no_backup_existing_symlinks");
+
+        match &operations[0] {
+            SymlinkOperation::CreateSymlink(mapping) => {
+                assert!(mapping.source.to_string_lossy().ends_with(".gitconfig"));
+            }
+            _ => panic!("Expected CreateSymlink operation without backup"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_actual_run() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+        fs::create_dir_all(dotfiles_dir.join("testhost/__"))?;
+
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+        File::create(dotfiles_dir.join("testhost/__/__bashrc"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Actual run with filter
+        let operations = context.apply_symlinks(false, false, Some("dotsym"))?;
+        assert_eq!(operations.len(), 1, "Should apply only filtered symlinks");
+
+        // Verify only the filtered file was created
+        let home_gitconfig = home_dir.path().join(".gitconfig");
+        let home_bashrc = home_dir.path().join(".bashrc");
+
+        assert!(home_gitconfig.is_symlink(), "Filtered symlink should be created");
+        assert!(!home_bashrc.exists(), "Unfiltered symlink should not be created");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_complex_literal_directory() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory with nested literal directories
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__config__app1"))?;
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__config__app2"))?;
+
+        File::create(dotfiles_dir.join("dotsym/__config__app1/settings.conf"))?;
+        File::create(dotfiles_dir.join("dotsym/__config__app2/config.toml"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Filter by dotsym/__config__app1
+        let operations = context.apply_symlinks(true, false, Some("dotsym/__config__app1"))?;
+        assert_eq!(operations.len(), 1, "Should only include mappings from dotsym/__config__app1");
+
+        match &operations[0] {
+            SymlinkOperation::CreateSymlink(mapping) => {
+                assert!(mapping.source.to_string_lossy().ends_with("settings.conf"));
+            }
+            _ => panic!("Expected CreateSymlink operation"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_with_multiple_host_dirs_and_literal_dirs() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up a complex directory structure
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__config"))?;
+        fs::create_dir_all(dotfiles_dir.join("dotsym__2/__"))?;
+        fs::create_dir_all(dotfiles_dir.join("testhost/__"))?;
+        fs::create_dir_all(dotfiles_dir.join("testhost/__config"))?;
+
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+        File::create(dotfiles_dir.join("dotsym/__config/app.conf"))?;
+        File::create(dotfiles_dir.join("dotsym__2/__/__bashrc"))?;
+        File::create(dotfiles_dir.join("testhost/__/__vimrc"))?;
+        File::create(dotfiles_dir.join("testhost/__config/local.conf"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Test 1: Filter by "dotsym" should get only dotsym host dir (not dotsym__2)
+        let operations = context.apply_symlinks(true, false, Some("dotsym"))?;
+        assert_eq!(operations.len(), 2, "Should only include dotsym host directory mappings (both __ and __config)");
+
+        // Test 2: Filter by "dotsym__2" should get only dotsym__2
+        let operations = context.apply_symlinks(true, false, Some("dotsym__2"))?;
+        assert_eq!(operations.len(), 1, "Should only include dotsym__2 host directory mappings");
+
+        // Test 3: Filter by "testhost/__config" should get only testhost/__config
+        let operations = context.apply_symlinks(true, false, Some("testhost/__config"))?;
+        assert_eq!(operations.len(), 1, "Should only include testhost/__config literal directory mappings");
+
+        match &operations[0] {
+            SymlinkOperation::CreateSymlink(mapping) => {
+                assert!(mapping.source.to_string_lossy().ends_with("local.conf"));
+            }
+            _ => panic!("Expected CreateSymlink operation"),
+        }
+
+        // Test 4: No filter should get all mappings
+        let operations = context.apply_symlinks(true, false, None)?;
+        assert_eq!(operations.len(), 5, "Should include all mappings when no filter is specified");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_with_trailing_slash() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory
+        let dotfiles_dir = temp_dir.path();
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Filter with trailing slash should still work
+        let operations = context.apply_symlinks(true, false, Some("dotsym/"))?;
+        assert_eq!(operations.len(), 1, "Should work with trailing slash");
 
         Ok(())
     }
