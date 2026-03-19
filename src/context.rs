@@ -138,11 +138,8 @@ impl DotsymContext {
                     path: host_dir.clone(),
                     source: e,
                 })?;
-                let file_type = entry.file_type().map_err(|e| DotsymError::DirectoryTraversal {
-                    path: host_dir.clone(),
-                    source: e,
-                })?;
-                if file_type.is_dir() {
+                // Use entry.path().is_dir() to follow symlinks - literal directories can be symlinks to directories
+                if entry.path().is_dir() {
                     literal_dirs.push(entry.file_name().to_string_lossy().to_string());
                 }
             }
@@ -205,12 +202,12 @@ impl DotsymContext {
         }
     }
 
-    pub fn apply_symlinks(&self, dry_run: bool) -> Result<Vec<SymlinkOperation>, DotsymError> {
+    pub fn apply_symlinks(&self, dry_run: bool, no_backup_existing_symlinks: bool) -> Result<Vec<SymlinkOperation>, DotsymError> {
         let mappings = self.get_symlink_mappings()?;
         let mut operations = Vec::new();
 
         for mapping in mappings {
-            let operation = self.analyze_symlink(&mapping)?;
+            let operation = self.analyze_symlink(&mapping, no_backup_existing_symlinks)?;
 
             if dry_run {
                 println!("{}", operation.describe());
@@ -225,7 +222,7 @@ impl DotsymContext {
         Ok(operations)
     }
 
-    pub fn analyze_symlink(&self, mapping: &SymlinkMapping) -> Result<SymlinkOperation, DotsymError> {
+    pub fn analyze_symlink(&self, mapping: &SymlinkMapping, no_backup_existing_symlinks: bool) -> Result<SymlinkOperation, DotsymError> {
         // Check if source (destination file) exists - allow symlinks even if broken
         if !mapping.destination.exists() && !mapping.destination.is_symlink() {
             return Err(DotsymError::SourceFileNotFound {
@@ -241,12 +238,18 @@ impl DotsymContext {
                     && current_target == mapping.destination {
                         return Ok(SymlinkOperation::AlreadyExists(mapping.clone()));
                     }
-                // Wrong or broken symlink - back it up like any other file
-                let backup_path = self.generate_backup_path(&mapping.source);
-                return Ok(SymlinkOperation::CreateWithBackup {
-                    mapping: mapping.clone(),
-                    backup_path,
-                });
+                // Wrong or broken symlink - check if we should skip backup
+                if no_backup_existing_symlinks {
+                    // Skip backup, just replace the symlink
+                    return Ok(SymlinkOperation::CreateSymlink(mapping.clone()));
+                } else {
+                    // Back it up like any other file
+                    let backup_path = self.generate_backup_path(&mapping.source);
+                    return Ok(SymlinkOperation::CreateWithBackup {
+                        mapping: mapping.clone(),
+                        backup_path,
+                    });
+                }
             } else {
                 // It's a regular file/directory - we need to back it up
                 let backup_path = self.generate_backup_path(&mapping.source);

@@ -14,6 +14,8 @@ pub enum Commands {
     Apply {
         #[arg(short, long)]
         dry_run: bool,
+        #[arg(long, help = "Skip backing up existing symlinks (files and directories are still backed up)")]
+        no_backup_existing_symlinks: bool,
     },
     Setup {
         directory: String,

@@ -22,11 +22,11 @@ fn main() -> AnyhowResult<()> {
                 .context("Failed to initialize dotsym context")?;
             preview_command(&context)
         }
-        Commands::Apply { dry_run } => {
+        Commands::Apply { dry_run, no_backup_existing_symlinks } => {
             let config = load_config()?;
             let context = DotsymContext::new(config, None, None)
                 .context("Failed to initialize dotsym context")?;
-            apply_command(&context, dry_run)
+            apply_command(&context, dry_run, no_backup_existing_symlinks)
         }
         Commands::Setup { directory, separator } => {
             setup_command(directory, separator)
@@ -383,7 +383,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true)?; // dry run
+        let operations = context.apply_symlinks(true, false)?; // dry run
 
         assert_eq!(operations.len(), 1);
         match &operations[0] {
@@ -415,7 +415,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true)?; // dry run
+        let operations = context.apply_symlinks(true, false)?; // dry run
 
         assert_eq!(operations.len(), 1);
         match &operations[0] {
@@ -448,7 +448,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true)?; // dry run
+        let operations = context.apply_symlinks(true, false)?; // dry run
 
         assert_eq!(operations.len(), 1);
         match &operations[0] {
@@ -482,7 +482,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true)?; // dry run
+        let operations = context.apply_symlinks(true, false)?; // dry run
 
         assert_eq!(operations.len(), 1);
         match &operations[0] {
@@ -525,7 +525,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true)?; // dry run - should not error
+        let operations = context.apply_symlinks(true, false)?; // dry run - should not error
         assert_eq!(operations.len(), 1);
 
         match &operations[0] {
@@ -573,7 +573,7 @@ mod tests {
         // Now delete the file and try to analyze the symlink
         fs::remove_file(&gitconfig_path)?;
 
-        let result = context.analyze_symlink(gitconfig_mapping);
+        let result = context.analyze_symlink(gitconfig_mapping, false);
         assert!(result.is_err());
 
         if let Err(DotsymError::SourceFileNotFound { path }) = result {
@@ -600,7 +600,7 @@ mod tests {
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
         // Execute apply (not dry run)
-        let operations = context.apply_symlinks(false)?;
+        let operations = context.apply_symlinks(false, false)?;
 
         assert_eq!(operations.len(), 1);
 
@@ -686,7 +686,7 @@ mod tests {
         let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
-        let operations = context.apply_symlinks(true)?; // dry run
+        let operations = context.apply_symlinks(true, false)?; // dry run
 
         assert_eq!(operations.len(), 1);
         match &operations[0] {
@@ -720,7 +720,7 @@ mod tests {
         let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
 
         // Execute apply (not dry run)
-        let operations = context.apply_symlinks(false)?;
+        let operations = context.apply_symlinks(false, false)?;
 
         assert_eq!(operations.len(), 1);
 
@@ -975,6 +975,43 @@ dir = "~/dotfiles"
         // Verify symlink was created
         let config_symlink = home_dir.join(".config/dotsym/dotsym.toml");
         assert!(config_symlink.is_symlink(), "Config symlink should exist");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_symlinked_literal_directory() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Set up dotfiles directory
+        let dotfiles_dir = temp_dir.path();
+
+        // Create an actual directory with files
+        fs::create_dir_all(dotfiles_dir.join("actual_dir"))?;
+        let mut test_file = File::create(dotfiles_dir.join("actual_dir/__gitconfig"))?;
+        test_file.write_all(b"[user]\n    name = Test User\n")?;
+
+        // Create a symlink to this directory as a literal directory
+        fs::create_dir_all(dotfiles_dir.join("dotsym"))?;
+        unix_fs::symlink(
+            dotfiles_dir.join("actual_dir"),
+            dotfiles_dir.join("dotsym/__")
+        )?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_dir.path().to_path_buf()));
+
+        // Get mappings - this should traverse into the symlinked directory
+        let mappings = context.get_symlink_mappings()?;
+
+        assert_eq!(mappings.len(), 1, "Should find file inside symlinked literal directory");
+        assert!(mappings[0].source.to_string_lossy().ends_with(".gitconfig"));
+        assert!(mappings[0].destination.to_string_lossy().ends_with("__gitconfig"));
+
+        // Test that apply works correctly
+        let operations = context.apply_symlinks(true, false)?; // dry run
+        assert_eq!(operations.len(), 1);
 
         Ok(())
     }

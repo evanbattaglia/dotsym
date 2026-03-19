@@ -19,13 +19,13 @@ pub fn preview_command(context: &DotsymContext) -> AnyhowResult<()> {
     Ok(())
 }
 
-pub fn apply_command(context: &DotsymContext, dry_run: bool) -> AnyhowResult<()> {
+pub fn apply_command(context: &DotsymContext, dry_run: bool, no_backup_existing_symlinks: bool) -> AnyhowResult<()> {
     if dry_run {
         println!("DRY RUN - showing what would be done:");
         println!();
     }
 
-    let operations = context.apply_symlinks(dry_run)
+    let operations = context.apply_symlinks(dry_run, no_backup_existing_symlinks)
         .context("Failed to apply symlink operations")?;
 
     if dry_run {
