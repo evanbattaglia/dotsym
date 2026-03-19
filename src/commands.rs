@@ -28,25 +28,25 @@ pub fn apply_command(context: &DotsymContext, dry_run: bool, no_backup_existing_
     let operations = context.apply_symlinks(dry_run, no_backup_existing_symlinks)
         .context("Failed to apply symlink operations")?;
 
-    if dry_run {
-        println!();
+    println!();
 
-        // Count operation types
-        let mut exists_count = 0;
-        let mut create_count = 0;
-        let mut backup_count = 0;
+    // Count operation types
+    let mut exists_count = 0;
+    let mut create_count = 0;
+    let mut backup_count = 0;
 
-        for operation in &operations {
-            match operation {
-                crate::context::SymlinkOperation::AlreadyExists(_) => exists_count += 1,
-                crate::context::SymlinkOperation::CreateSymlink(_) => create_count += 1,
-                crate::context::SymlinkOperation::CreateWithBackup { .. } => {
-                    create_count += 1;
-                    backup_count += 1;
-                }
+    for operation in &operations {
+        match operation {
+            crate::context::SymlinkOperation::AlreadyExists(_) => exists_count += 1,
+            crate::context::SymlinkOperation::CreateSymlink(_) => create_count += 1,
+            crate::context::SymlinkOperation::CreateWithBackup { .. } => {
+                create_count += 1;
+                backup_count += 1;
             }
         }
+    }
 
+    if dry_run {
         println!("Dry run complete:");
         println!("  {} symlinks already exist (nothing to do)", exists_count);
         println!("  {} symlinks would be created", create_count);
@@ -56,8 +56,12 @@ pub fn apply_command(context: &DotsymContext, dry_run: bool, no_backup_existing_
         println!();
         println!("Run without --dry-run to apply these changes.");
     } else {
-        println!();
-        println!("Applied {} symlink operations successfully.", operations.len());
+        println!("Complete:");
+        println!("  {} symlinks already existed (nothing done)", exists_count);
+        println!("  {} symlinks created", create_count);
+        if backup_count > 0 {
+            println!("  {} files/directories backed up", backup_count);
+        }
     }
 
     Ok(())
