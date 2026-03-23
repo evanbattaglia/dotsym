@@ -12,7 +12,7 @@ pub struct Cli {
 pub enum Commands {
     Preview,
     Apply {
-        #[arg(short, long)]
+        #[arg(short = 'n', long)]
         dry_run: bool,
         #[arg(long, help = "Skip backing up existing symlinks (files and directories are still backed up)")]
         no_backup_existing_symlinks: bool,

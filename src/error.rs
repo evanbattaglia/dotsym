@@ -27,12 +27,6 @@ pub enum DotsymError {
     #[error("Source file '{path}' does not exist")]
     SourceFileNotFound { path: PathBuf },
 
-    #[error("Destination '{path}' already exists and is not a symlink")]
-    DestinationExists { path: PathBuf },
-
-    #[error("Destination symlink '{path}' points to '{current_target}' but should point to '{expected_target}'")]
-    SymlinkMismatch { path: PathBuf, current_target: PathBuf, expected_target: PathBuf },
-
     #[error("Failed to create backup '{backup_path}' for '{original_path}': {source}")]
     BackupCreation { original_path: PathBuf, backup_path: PathBuf, source: std::io::Error },
 }
