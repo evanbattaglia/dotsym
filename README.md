@@ -175,6 +175,21 @@ files in `dotsym__2/**` are specific to each worktree.
    the status of the files in your home directory: it simply prints out the
    source and destination of each symlink managed. See the example output
    above.
+4. `dotsym dotsymize PATH`. The inverse of `apply` for a single file or
+   directory: it takes a path that currently lives at its normal location (e.g.
+   `~/git/myproject/.claude/skills/local-api-requests`), works out where
+   it would live inside the dotfiles repo, **moves it there**, and replaces the
+   original with a symlink — so it is now managed by dotsym. Because a path can
+   be split between the "literal directory" and the "destination name" at any
+   level, and can be placed in either the generic `dotsym` host directory or a
+   host-specific one, there are usually several valid destinations. dotsymize
+   lists them and lets you choose, **preferring (and recommending) a location
+   whose literal directory already exists** in the repo. For the example above
+   it offers, among others, the recommended
+   `<hostname>/git__myproject/__claude__skills__local-api-requests`.
+   Use `--dry-run` / `-n` to see the candidates and the chosen action without
+   moving anything, or `--yes` / `-y` to skip the prompt and take the
+   recommended candidate.
 
 # Building static binary
 ```

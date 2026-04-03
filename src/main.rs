@@ -8,7 +8,7 @@ mod context;
 mod error;
 
 use cli::{Cli, Commands};
-use commands::{apply_command, preview_command, setup_command};
+use commands::{apply_command, dotsymize_command, preview_command, setup_command};
 use config::load_config;
 use context::DotsymContext;
 
@@ -30,6 +30,12 @@ fn main() -> AnyhowResult<()> {
         }
         Commands::Setup { directory, separator } => {
             setup_command(directory, separator)
+        }
+        Commands::Dotsymize { path, dry_run, yes } => {
+            let config = load_config()?;
+            let context = DotsymContext::new(config, None, None)
+                .context("Failed to initialize dotsym context")?;
+            dotsymize_command(&context, path, dry_run, yes)
         }
     }
 }
@@ -1482,6 +1488,168 @@ dir = "~/dotfiles"
         // Filter with trailing slash should still work
         let operations = context.apply_symlinks(true, false, Some("dotsym/"))?;
         assert_eq!(operations.len(), 1, "Should work with trailing slash");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dotsymize_existing_dir_candidate_and_apply() -> Result<(), Box<dyn std::error::Error>> {
+        let repo = TempDir::new()?;
+        let home = TempDir::new()?;
+        let repo_path = repo.path();
+        let home_path = home.path();
+
+        // An existing literal directory in the host-specific host dir.
+        fs::create_dir_all(repo_path.join("myhost/code__myproject"))?;
+        fs::create_dir_all(repo_path.join("dotsym/__"))?;
+
+        // The file we want to bring under management.
+        fs::create_dir_all(home_path.join("code/myproject/sub"))?;
+        let target = home_path.join("code/myproject/sub/file.txt");
+        File::create(&target)?.write_all(b"hello")?;
+
+        let config = create_test_config("__", repo_path.to_str().unwrap());
+        let context = create_test_context(config, Some("myhost".to_string()), Some(home_path.to_path_buf()));
+
+        let candidates = context.dotsymize_candidates(&target)?;
+        let expected = repo_path.join("myhost/code__myproject/sub__file.txt");
+        assert!(
+            candidates.iter().any(|c| c.repo_dest == expected && c.literal_dir_exists),
+            "expected an existing-dir candidate at {}",
+            expected.display()
+        );
+
+        // Apply it: file moves into the repo, original becomes a symlink.
+        context.dotsymize_apply(&target, &expected)?;
+        assert!(expected.exists());
+        assert_eq!(fs::read_to_string(&expected)?, "hello");
+        assert!(target.is_symlink());
+        assert_eq!(fs::read_link(&target)?, expected);
+
+        // dotsym now manages it: it round-trips back to the original location.
+        let mappings = context.get_symlink_mappings()?;
+        assert!(
+            mappings.iter().any(|m| m.source == target && m.destination == expected),
+            "expected get_symlink_mappings to map {} -> {}",
+            target.display(),
+            expected.display()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dotsymize_leading_dot_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        let repo = TempDir::new()?;
+        let home = TempDir::new()?;
+        let repo_path = repo.path();
+        let home_path = home.path();
+
+        // Existing literal dir in the generic host dir.
+        fs::create_dir_all(repo_path.join("dotsym/git__proj"))?;
+
+        fs::create_dir_all(home_path.join("git/proj/.config"))?;
+        let target = home_path.join("git/proj/.config/settings");
+        File::create(&target)?.write_all(b"x")?;
+
+        let config = create_test_config("__", repo_path.to_str().unwrap());
+        let context = create_test_context(config, Some("otherhost".to_string()), Some(home_path.to_path_buf()));
+
+        let candidates = context.dotsymize_candidates(&target)?;
+        // The leading "." in ".config" must collapse to the separator.
+        let expected = repo_path.join("dotsym/git__proj/__config__settings");
+        assert!(
+            candidates.iter().any(|c| c.repo_dest == expected && c.literal_dir_exists),
+            "expected leading-dot candidate at {}",
+            expected.display()
+        );
+
+        context.dotsymize_apply(&target, &expected)?;
+        let mappings = context.get_symlink_mappings()?;
+        assert!(
+            mappings.iter().any(|m| m.source == target),
+            "leading-dot path should round-trip back to {}",
+            target.display()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dotsymize_recommends_existing_host_specific_deepest() -> Result<(), Box<dyn std::error::Error>> {
+        let repo = TempDir::new()?;
+        let home = TempDir::new()?;
+        let repo_path = repo.path();
+        let home_path = home.path();
+
+        // A deep, host-specific existing literal dir, plus shallow home dirs.
+        fs::create_dir_all(repo_path.join("myhost/git__myproject"))?;
+        fs::create_dir_all(repo_path.join("myhost/__"))?;
+        fs::create_dir_all(repo_path.join("dotsym/__"))?;
+
+        fs::create_dir_all(home_path.join("git/myproject/.claude/skills/foo"))?;
+        let target = home_path.join("git/myproject/.claude/skills/foo");
+
+        let config = create_test_config("__", repo_path.to_str().unwrap());
+        let context = create_test_context(config, Some("myhost".to_string()), Some(home_path.to_path_buf()));
+
+        let candidates = crate::commands::select_dotsymize_candidates(
+            &context,
+            context.dotsymize_candidates(&target)?,
+        );
+
+        assert!(!candidates.is_empty());
+        let recommended = &candidates[0];
+        assert_eq!(
+            recommended.repo_dest,
+            repo_path.join("myhost/git__myproject/__claude__skills__foo")
+        );
+        assert!(recommended.literal_dir_exists);
+        assert!(recommended.host_specific);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dotsymize_rejects_path_outside_home() -> Result<(), Box<dyn std::error::Error>> {
+        let repo = TempDir::new()?;
+        let home = TempDir::new()?;
+
+        let config = create_test_config("__", repo.path().to_str().unwrap());
+        let context = create_test_context(config, Some("myhost".to_string()), Some(home.path().to_path_buf()));
+
+        let outside = PathBuf::from("/etc/somewhere/file");
+        assert!(matches!(
+            context.dotsymize_candidates(&outside),
+            Err(DotsymError::NotUnderHome { .. })
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dotsymize_apply_refuses_existing_destination() -> Result<(), Box<dyn std::error::Error>> {
+        let repo = TempDir::new()?;
+        let home = TempDir::new()?;
+        let repo_path = repo.path();
+        let home_path = home.path();
+
+        fs::create_dir_all(repo_path.join("dotsym/__"))?;
+        let dest = repo_path.join("dotsym/__/__gitconfig");
+        File::create(&dest)?;
+
+        let target = home_path.join(".gitconfig");
+        File::create(&target)?;
+
+        let config = create_test_config("__", repo_path.to_str().unwrap());
+        let context = create_test_context(config, Some("myhost".to_string()), Some(home_path.to_path_buf()));
+
+        assert!(matches!(
+            context.dotsymize_apply(&target, &dest),
+            Err(DotsymError::DestinationExists { .. })
+        ));
+        // The target must be left untouched (still a regular file, not a symlink).
+        assert!(!target.is_symlink());
 
         Ok(())
     }

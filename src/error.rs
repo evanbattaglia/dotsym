@@ -29,4 +29,10 @@ pub enum DotsymError {
 
     #[error("Failed to create backup '{backup_path}' for '{original_path}': {source}")]
     BackupCreation { original_path: PathBuf, backup_path: PathBuf, source: std::io::Error },
+
+    #[error("Path '{path}' is not located under the home directory and cannot be managed by dotsym")]
+    NotUnderHome { path: PathBuf },
+
+    #[error("Destination '{path}' already exists in the dotfiles repo; refusing to overwrite it")]
+    DestinationExists { path: PathBuf },
 }

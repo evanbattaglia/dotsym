@@ -23,4 +23,13 @@ pub enum Commands {
         directory: String,
         separator: String,
     },
+    #[command(about = "Move a file/dir into the dotfiles repo and symlink it back, so it can be managed by dotsym")]
+    Dotsymize {
+        #[arg(help = "Path of the file or directory to bring under dotsym management")]
+        path: String,
+        #[arg(short = 'n', long, help = "Show the candidate locations and chosen action without moving anything")]
+        dry_run: bool,
+        #[arg(short = 'y', long, help = "Don't prompt; use the recommended (first) candidate")]
+        yes: bool,
+    },
 }

@@ -1,9 +1,35 @@
+use std::collections::HashSet;
 use std::fs;
 use std::os::unix::fs as unix_fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::config::Config;
 use crate::error::DotsymError;
+
+/// A possible location in the dotfiles repo where a target path could be moved
+/// so that a symlink back to the original location can be managed by dotsym.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // some fields are descriptive metadata not consumed internally
+pub struct DotsymizeCandidate {
+    /// The host directory name (e.g. "dotsym", "myhostname", "myhostname__a").
+    pub host_dir: String,
+    /// The collapsed literal-directory name (the dir in which the link is created).
+    pub literal_dir: String,
+    /// The collapsed destination name (the file/dir directly inside the literal dir).
+    pub dest_name: String,
+    /// Full path to where the file/dir would live inside the repo.
+    pub repo_dest: PathBuf,
+    /// Full path to the literal directory inside the repo.
+    pub literal_dir_path: PathBuf,
+    /// Whether the literal directory already exists in the repo.
+    pub literal_dir_exists: bool,
+    /// Whether the host directory already exists in the repo.
+    pub host_dir_exists: bool,
+    /// Number of original path components that went into the literal directory.
+    pub literal_depth: usize,
+    /// Whether this host directory is host-specific (vs. the generic "dotsym").
+    pub host_specific: bool,
+}
 
 #[derive(Debug, Clone)]
 pub struct SymlinkMapping {
@@ -82,6 +108,188 @@ impl DotsymContext {
         result = result.replace(separator, "/");
 
         result
+    }
+
+    /// Inverse of `expand_path`: turn a path relative to the home directory into
+    /// a collapsed literal-directory or destination name (a leading "." becomes the
+    /// separator, and "/" path separators become the separator). An empty string
+    /// (the home directory itself) collapses to the bare separator.
+    fn collapse_path(&self, rel: &str) -> String {
+        let separator = &self.config.separator;
+
+        if rel.is_empty() {
+            return separator.clone();
+        }
+
+        let mut result = rel.to_string();
+
+        if let Some(stripped) = result.strip_prefix('.') {
+            result = format!("{}{}", separator, stripped);
+        }
+
+        result.replace('/', separator)
+    }
+
+    /// The configured dotfiles directory, with a leading `~/` expanded.
+    pub fn config_dir(&self) -> PathBuf {
+        let expanded = self.config.dir.replace("~/", &format!("{}/", self.home_dir.display()));
+        PathBuf::from(expanded)
+    }
+
+    /// Determine the candidate host directories to consider when dotsymizing.
+    /// Always includes the canonical generic ("dotsym") and host-specific
+    /// (hostname) directories, plus any existing `dotsym__*` / `hostname__*`
+    /// variants found in the repo. Returns (name, host_specific) pairs.
+    fn dotsymize_host_dirs(&self, config_dir: &Path) -> Vec<(String, bool)> {
+        let mut result = Vec::new();
+        let mut seen = HashSet::new();
+
+        for (name, specific) in [(self.hostname.clone(), true), ("dotsym".to_string(), false)] {
+            if seen.insert(name.clone()) {
+                result.push((name, specific));
+            }
+        }
+
+        if let Ok(entries) = fs::read_dir(config_dir) {
+            for entry in entries.flatten() {
+                if !entry.path().is_dir() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                let specific = if name == self.hostname
+                    || name.starts_with(&format!("{}__", self.hostname))
+                {
+                    true
+                } else if name == "dotsym" || name.starts_with("dotsym__") {
+                    false
+                } else {
+                    continue;
+                };
+                if seen.insert(name.clone()) {
+                    result.push((name, specific));
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Normalize a path logically (resolving `.` and `..` without touching the
+    /// filesystem or following symlinks), making it absolute relative to `cwd`
+    /// if necessary and expanding a leading `~`.
+    pub fn resolve_target(&self, raw: &str, cwd: &Path) -> PathBuf {
+        let expanded = if raw == "~" {
+            self.home_dir.clone()
+        } else if let Some(rest) = raw.strip_prefix("~/") {
+            self.home_dir.join(rest)
+        } else {
+            PathBuf::from(raw)
+        };
+
+        let absolute = if expanded.is_absolute() {
+            expanded
+        } else {
+            cwd.join(expanded)
+        };
+
+        let mut out = PathBuf::new();
+        for component in absolute.components() {
+            match component {
+                Component::ParentDir => {
+                    out.pop();
+                }
+                Component::CurDir => {}
+                other => out.push(other.as_os_str()),
+            }
+        }
+        out
+    }
+
+    /// Given the (already resolved, absolute) path of a file or directory the
+    /// user wants to manage, enumerate the possible places it could be moved to
+    /// inside the dotfiles repo so a symlink back to it can be managed.
+    pub fn dotsymize_candidates(&self, target: &Path) -> Result<Vec<DotsymizeCandidate>, DotsymError> {
+        let config_dir = self.config_dir();
+
+        let rel = target.strip_prefix(&self.home_dir).map_err(|_| DotsymError::NotUnderHome {
+            path: target.to_path_buf(),
+        })?;
+
+        let components: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
+
+        if components.is_empty() {
+            return Err(DotsymError::NotUnderHome {
+                path: target.to_path_buf(),
+            });
+        }
+
+        let host_dirs = self.dotsymize_host_dirs(&config_dir);
+        let mut candidates = Vec::new();
+
+        // Split the relative path at every component boundary: the prefix becomes
+        // the literal directory, the remainder becomes the destination name.
+        for k in 0..components.len() {
+            let literal_rel = components[..k].join("/");
+            let dest_rel = components[k..].join("/");
+            let literal_dir = self.collapse_path(&literal_rel);
+            let dest_name = self.collapse_path(&dest_rel);
+
+            for (host_dir, host_specific) in &host_dirs {
+                let host_path = config_dir.join(host_dir);
+                let literal_dir_path = host_path.join(&literal_dir);
+                let repo_dest = literal_dir_path.join(&dest_name);
+
+                candidates.push(DotsymizeCandidate {
+                    host_dir: host_dir.clone(),
+                    literal_dir: literal_dir.clone(),
+                    dest_name: dest_name.clone(),
+                    literal_dir_exists: literal_dir_path.is_dir(),
+                    host_dir_exists: host_path.is_dir(),
+                    literal_dir_path,
+                    repo_dest,
+                    literal_depth: k,
+                    host_specific: *host_specific,
+                });
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    /// Move `target` into the repo at `repo_dest` and replace it with a symlink
+    /// pointing at the new location.
+    pub fn dotsymize_apply(&self, target: &Path, repo_dest: &Path) -> Result<(), DotsymError> {
+        if repo_dest.exists() || repo_dest.is_symlink() {
+            return Err(DotsymError::DestinationExists {
+                path: repo_dest.to_path_buf(),
+            });
+        }
+
+        if let Some(parent) = repo_dest.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent).map_err(|e| DotsymError::ParentDirectoryCreation {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
+        }
+
+        fs::rename(target, repo_dest).map_err(|e| DotsymError::BackupCreation {
+            original_path: target.to_path_buf(),
+            backup_path: repo_dest.to_path_buf(),
+            source: e,
+        })?;
+
+        unix_fs::symlink(repo_dest, target).map_err(|e| DotsymError::SymlinkCreation {
+            source: target.to_path_buf(),
+            destination: repo_dest.to_path_buf(),
+            io_error: e,
+        })?;
+
+        Ok(())
     }
 
     pub fn get_symlink_mappings(&self) -> Result<Vec<SymlinkMapping>, DotsymError> {

@@ -1,10 +1,12 @@
 use anyhow::{Context, Result as AnyhowResult};
+use std::cmp::Reverse;
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs as unix_fs;
 use std::path::PathBuf;
 
 use crate::config::Config;
-use crate::context::DotsymContext;
+use crate::context::{DotsymContext, DotsymizeCandidate};
 
 pub fn preview_command(context: &DotsymContext) -> AnyhowResult<()> {
     let mappings = context.get_symlink_mappings()
@@ -70,6 +72,170 @@ pub fn apply_command(context: &DotsymContext, dry_run: bool, no_backup_existing_
     }
 
     Ok(())
+}
+
+/// Decide which candidates to present and in what order. Existing literal
+/// directories are preferred (deepest first), then host-specific over generic.
+/// For locations that don't exist yet, only offer the canonical "new directory"
+/// choice (mirror the full parent path) in the two primary host directories, to
+/// keep the list focused.
+pub(crate) fn select_dotsymize_candidates(
+    context: &DotsymContext,
+    candidates: Vec<DotsymizeCandidate>,
+) -> Vec<DotsymizeCandidate> {
+    let max_depth = candidates.iter().map(|c| c.literal_depth).max().unwrap_or(0);
+
+    let mut kept: Vec<DotsymizeCandidate> = candidates
+        .into_iter()
+        .filter(|c| {
+            c.literal_dir_exists
+                || (c.literal_depth == max_depth
+                    && (c.host_dir == context.hostname || c.host_dir == "dotsym"))
+        })
+        .collect();
+
+    kept.sort_by(|a, b| {
+        // existing literal dirs first, then deeper literal dirs, then
+        // host-specific before generic, then by host name for stability.
+        (!a.literal_dir_exists, Reverse(a.literal_depth), !a.host_specific, a.host_dir.clone()).cmp(
+            &(!b.literal_dir_exists, Reverse(b.literal_depth), !b.host_specific, b.host_dir.clone()),
+        )
+    });
+
+    // Drop duplicate destinations (different splits can collapse to the same path).
+    let mut seen = std::collections::HashSet::new();
+    kept.retain(|c| seen.insert(c.repo_dest.clone()));
+
+    kept
+}
+
+pub fn dotsymize_command(
+    context: &DotsymContext,
+    path: String,
+    dry_run: bool,
+    yes: bool,
+) -> AnyhowResult<()> {
+    let cwd = std::env::current_dir().context("Failed to determine current directory")?;
+    let target = context.resolve_target(&path, &cwd);
+
+    if !target.exists() && !target.is_symlink() {
+        return Err(anyhow::anyhow!("Path does not exist: {}", target.display()));
+    }
+
+    if target.is_symlink() {
+        return Err(anyhow::anyhow!(
+            "{} is already a symlink; it may already be managed. Refusing to dotsymize it.",
+            target.display()
+        ));
+    }
+
+    let config_dir = context.config_dir();
+    if target.starts_with(&config_dir) {
+        return Err(anyhow::anyhow!(
+            "{} is inside the dotfiles repo ({}); nothing to do.",
+            target.display(),
+            config_dir.display()
+        ));
+    }
+
+    if target
+        .components()
+        .any(|c| c.as_os_str().to_string_lossy().contains(&context.config.separator))
+    {
+        eprintln!(
+            "Warning: a path component contains the separator '{}'; the generated symlink may not round-trip correctly.",
+            context.config.separator
+        );
+    }
+
+    let candidates = select_dotsymize_candidates(context, context.dotsymize_candidates(&target)?);
+
+    if candidates.is_empty() {
+        return Err(anyhow::anyhow!("Could not determine any dotsym destination for {}", target.display()));
+    }
+
+    println!("Dotsymize: {}", target.display());
+    println!();
+    println!("Candidate locations in the dotfiles repo ({}):", config_dir.display());
+    println!();
+
+    for (i, c) in candidates.iter().enumerate() {
+        let rel = c.repo_dest.strip_prefix(&config_dir).unwrap_or(&c.repo_dest);
+        let mut tags = Vec::new();
+        if c.literal_dir_exists {
+            tags.push("existing dir".to_string());
+        } else if !c.host_dir_exists {
+            tags.push("new host dir".to_string());
+        } else {
+            tags.push("new dir".to_string());
+        }
+        if i == 0 {
+            tags.push("recommended".to_string());
+        }
+        println!("  {}) {}  [{}]", i + 1, rel.display(), tags.join(", "));
+    }
+    println!();
+
+    let choice = if yes || dry_run {
+        Some(0)
+    } else {
+        prompt_choice(candidates.len())?
+    };
+
+    let Some(selected) = choice else {
+        println!("Cancelled.");
+        return Ok(());
+    };
+
+    let chosen = &candidates[selected];
+
+    println!();
+    println!("Will create:");
+    println!("  {} -> {}", target.display(), chosen.repo_dest.display());
+
+    if dry_run {
+        println!();
+        println!("Dry run - nothing was moved. Re-run without --dry-run to apply.");
+        return Ok(());
+    }
+
+    context
+        .dotsymize_apply(&target, &chosen.repo_dest)
+        .with_context(|| format!("Failed to dotsymize {}", target.display()))?;
+
+    println!();
+    println!("Done. {} now points into the dotfiles repo.", target.display());
+
+    Ok(())
+}
+
+/// Prompt for a 1-based choice; returns the 0-based index, or None if cancelled.
+/// In `dry_run`/`yes` paths this is not called. Defaults to the first (recommended)
+/// candidate on an empty line.
+fn prompt_choice(count: usize) -> AnyhowResult<Option<usize>> {
+    loop {
+        print!("Choose a destination [1] (q to cancel): ");
+        std::io::stdout().flush().ok();
+
+        let mut line = String::new();
+        let n = std::io::stdin().read_line(&mut line).context("Failed to read input")?;
+        if n == 0 {
+            // EOF
+            return Ok(None);
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(Some(0));
+        }
+        if trimmed.eq_ignore_ascii_case("q") {
+            return Ok(None);
+        }
+        match trimmed.parse::<usize>() {
+            Ok(i) if i >= 1 && i <= count => return Ok(Some(i - 1)),
+            _ => println!("Please enter a number between 1 and {} (or q to cancel).", count),
+        }
+    }
 }
 
 pub fn setup_command(directory: String, separator: String) -> AnyhowResult<()> {
