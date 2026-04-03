@@ -1,7 +1,13 @@
-# Dotsym
-dotsym allows you to put dotfiles in source control and handle them across multiple machines by making symlinks from the standard location (e.g. ~/.gitconfig) to someplace inside a git repo.
+# Dotsym -- dotfile and local overrides management, simplified
+dotsym allows you to put **dotfiles in source control** and handle them across multiple machines by making symlinks from the standard location (e.g. ~/.gitconfig) to someplace inside a git repo.
 
-It can also be used for your own personal files in some coding project that you do not want in source control, for instance, a directory of your personal scripts for the project. In this case you will also likely want to manage your own .git/config/exclude to hide your personal scripts from that project's source control.
+It can also be used for your "local overrides" user-specific configuration, that is, **your own personal files in a project** that you **do not want in the main repo source control**. By symlinking to the files and adding them to your own `.git/config/exclude`, the files can still be kept track of in your own repo.
+
+# Features
+* simple to use -- only two config options, the rest is dictated by directory structure
+* can have machine-specific override files
+* symlink whole directories, or individual files within directories
+* ordered directories allow you "layer" shared config in flexible ways (see [Layered example](#Layered-example))
 
 # Config
 The configuration is a file in `~/.dotsym/dotsym.toml` (this can also be a symlink to a file managed by dotsym). Example file:
@@ -50,33 +56,34 @@ Expansion rules for literal directories and symlink destinations:
   convenience, so literal directories and destination files won't start with a
   dot even if the file in the needed dotfile location does).
 
+# Example
 Example directory hierarchy, assuming `__` separator:
 ```
-   ~/my-personal-dotfiles-repo/
-     dotsym/
-       __/
-         __gitconfig
-       __config__dotsym/
-         dotsym.toml
-       code__myproject/
-         __git__info__exclude
-         mystuff
-     dotsym__2/
-       code__myproject/
-         mypersonalscripts
-     myhostname/
-       code__myproject/
-         __git__info__exclude
-        morepersonalstuff
-     myhostname__a/
-        __config/
-          program1/
-          program2__dir1/
-        __config__someotherprogram/
-          subdir__file2
-     otherhostname/
-       __config/
-         program1/
+~/my-personal-dotfiles-repo/
+  dotsym/
+    __/
+      __gitconfig
+    __config__dotsym/
+      dotsym.toml
+    code__myproject/
+      __git__info__exclude
+      mystuff
+  dotsym__2/
+    code__myproject/
+      mypersonalscripts
+  myhostname/
+    code__myproject/
+      __git__info__exclude
+     morepersonalstuff
+  myhostname__a/
+     __config/
+       program1/
+       program2__dir1/
+     __config__someotherprogram/
+       subdir__file2
+  otherhostname/
+    __config/
+      program1/
 ```
 
 Now, with that structure, for host myhostname, dotsym will ensure the following
@@ -110,6 +117,39 @@ links (example output from dotsym preview)
 /home/me/.config/someotherprogram/subdir/file2
 /home/me/my-personal-dotfiles-repo/myhostname__a/__config__someotherprogram/subdir__file2
 ```
+
+Note that in addition to dotfile management, this example shows how you can
+have your own `mypersonalscripts` directory which is kept outside of the
+project's main source control.
+
+## Layered example
+
+The above example shows how symlinks in `dotsym` and `dotsym__2` are applied in
+order. Here is a simpler example to illustrate this feature's usefulness. Let's
+say you can a project "myproject" with three git worktrees, `myproject-a`,
+`myproject-b`, and `myproject-c`. All three should use your personal `.env`
+file, but all three need different `config/database.yml` files. You can have a
+`dotsym/` directory structure like this:
+
+```
+~/my-personal-dotfiles-repo/
+  dotsym/
+     code__myproject-a/
+       __env
+     code__myproject_b -> code__myproject-a
+     code__myproject_c -> code__myproject-a
+   dotsym__2/
+     code__myproject-a/
+       config__database.yml
+     code__myproject-b/
+       config__database.yml
+     code__myproject-c/
+       config__database.yml
+ ```
+
+`dotsym/code__myproject-b` is a symlink to `code__myproject-a`, so changes you
+make in `code__myproject-a/` will get applied to all three worktrees, but the
+files in `dotsym__2/**` are specific to each worktree.
 
 # Usage
 1. `dotsym apply`. The main command. This creates the symlinks as indicated by
