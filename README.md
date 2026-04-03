@@ -57,6 +57,8 @@ Expansion rules for literal directories and symlink destinations:
   dot even if the file in the needed dotfile location does).
 
 # Example
+![doc/example.svg](doc/example.svg)
+
 Example directory hierarchy, assuming `__` separator:
 ```
 ~/my-personal-dotfiles-repo/

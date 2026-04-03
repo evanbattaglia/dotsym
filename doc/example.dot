@@ -1,0 +1,128 @@
+digraph dotsym_example {
+  rankdir=LR;
+  splines=polyline;
+  nodesep=0.3;
+  ranksep=2.5;
+  graph [fontname="monospace", fontsize=11];
+  node  [fontname="monospace", fontsize=10, shape=rectangle, style=filled, fillcolor=white];
+  edge  [fontname="monospace", fontsize=9, style=dashed, arrowhead=open, color="#444444"];
+
+  // ── HOME SIDE ────────────────────────────────────────────────────────────
+
+  subgraph cluster_home {
+    label="~/";
+    style=filled; fillcolor="#e8f4e8"; color="#2a7a2a"; penwidth=2;
+    fontsize=13; fontname="monospace bold";
+
+    home_gitconfig [label=".gitconfig"];
+
+    subgraph cluster_home_config {
+      label=".config/";
+      style=filled; fillcolor="#cce8cc"; color="#2a7a2a";
+
+      home_config_dotsym_toml   [label="dotsym/dotsym.toml"];
+      home_config_program1      [label="program1"];
+      home_config_program2_dir1 [label="program2/dir1"];
+      home_config_someprog_file2 [label="someotherprogram/subdir/file2"];
+    }
+
+    subgraph cluster_home_code {
+      label="code/myproject/";
+      style=filled; fillcolor="#cce8cc"; color="#2a7a2a";
+
+      home_mystuff           [label="mystuff"];
+      home_mypersonalscripts [label="mypersonalscripts"];
+      home_git_info_exclude  [label=".git/info/exclude"];
+      home_morepersonalstuff [label="morepersonalstuff"];
+    }
+  }
+
+  // ── REPO SIDE ─────────────────────────────────────────────────────────────
+
+  subgraph cluster_repo {
+    label="~/my-personal-dotfiles-repo/";
+    style=filled; fillcolor="#e8eef8"; color="#2a4a9a"; penwidth=2;
+    fontsize=13; fontname="monospace bold";
+
+    // dotsym/
+    subgraph cluster_repo_dotsym {
+      label="dotsym/";
+      style=filled; fillcolor="#d0ddf5"; color="#2a4a9a";
+
+      subgraph cluster_repo_dotsym_home {
+        label="__/  (→ ~/)";
+        style=filled; fillcolor="#b8ccf0"; color="#2a4a9a";
+        repo_gitconfig [label="__gitconfig"];
+      }
+
+      subgraph cluster_repo_dotsym_config_dotsym {
+        label="__config__dotsym/  (→ .config/dotsym/)";
+        style=filled; fillcolor="#b8ccf0"; color="#2a4a9a";
+        repo_dotsym_toml [label="dotsym.toml"];
+      }
+
+      subgraph cluster_repo_dotsym_code {
+        label="code__myproject/  (→ code/myproject/)";
+        style=filled; fillcolor="#b8ccf0"; color="#2a4a9a";
+        repo_git_info_exclude [label="__git__info__exclude"];
+        repo_mystuff           [label="mystuff"];
+      }
+    }
+
+    // dotsym__2/
+    subgraph cluster_repo_dotsym2 {
+      label="dotsym__2/";
+      style=filled; fillcolor="#d0ddf5"; color="#2a4a9a";
+
+      subgraph cluster_repo_dotsym2_code {
+        label="code__myproject/  (→ code/myproject/)";
+        style=filled; fillcolor="#b8ccf0"; color="#2a4a9a";
+        repo_mypersonalscripts [label="mypersonalscripts"];
+      }
+    }
+
+    // myhostname/
+    subgraph cluster_repo_myhostname {
+      label="myhostname/";
+      style=filled; fillcolor="#d0ddf5"; color="#2a4a9a";
+
+      subgraph cluster_repo_myhostname_code {
+        label="code__myproject/  (→ code/myproject/)";
+        style=filled; fillcolor="#b8ccf0"; color="#2a4a9a";
+        repo_myhostname_git_exclude [label="__git__info__exclude"];
+        repo_morepersonalstuff      [label="morepersonalstuff"];
+      }
+    }
+
+    // myhostname__a/
+    subgraph cluster_repo_myhostname_a {
+      label="myhostname__a/";
+      style=filled; fillcolor="#d0ddf5"; color="#2a4a9a";
+
+      subgraph cluster_repo_myhostname_a_config {
+        label="__config/  (→ .config/)";
+        style=filled; fillcolor="#b8ccf0"; color="#2a4a9a";
+        repo_program1      [label="program1/"];
+        repo_program2_dir1 [label="program2__dir1/\n(→ program2/dir1)"];
+      }
+
+      subgraph cluster_repo_myhostname_a_someprog {
+        label="__config__someotherprogram/\n(→ .config/someotherprogram/)";
+        style=filled; fillcolor="#b8ccf0"; color="#2a4a9a";
+        repo_subdir_file2 [label="subdir__file2\n(→ subdir/file2)"];
+      }
+    }
+  }
+
+  // ── SYMLINKS (home → repo target) ─────────────────────────────────────────
+
+  home_gitconfig             -> repo_gitconfig;
+  home_config_dotsym_toml    -> repo_dotsym_toml;
+  home_mystuff               -> repo_mystuff;
+  home_mypersonalscripts     -> repo_mypersonalscripts;
+  home_git_info_exclude      -> repo_myhostname_git_exclude;
+  home_morepersonalstuff     -> repo_morepersonalstuff;
+  home_config_program1       -> repo_program1;
+  home_config_program2_dir1  -> repo_program2_dir1;
+  home_config_someprog_file2 -> repo_subdir_file2;
+}
