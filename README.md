@@ -190,6 +190,17 @@ files in `dotsym__2/**` are specific to each worktree.
    Use `--dry-run` / `-n` to see the candidates and the chosen action without
    moving anything, or `--yes` / `-y` to skip the prompt and take the
    recommended candidate.
+5. `dotsym clean`. Cleans up stale symlinks left behind when a destination file
+   is removed from (or renamed in) the dotfiles repo. It looks in the
+   directories where the current dotsym structure makes its links and finds
+   symlinks that point somewhere **inside the dotfiles repo** but whose target
+   **no longer exists**. It lists them and prompts before deleting. It will
+   **never** delete a regular file, and never a symlink that points outside the
+   dotfiles repo. Use `--dry-run` / `-n` to only list them, or `--yes` / `-y`
+   to delete without prompting. Note that clean only inspects directories
+   referenced by the *current* directory structure, so if you deleted whole
+   directories from the repo, symlinks in locations that are no longer
+   referenced won't be found and must be removed manually.
 
 # Building static binary
 ```

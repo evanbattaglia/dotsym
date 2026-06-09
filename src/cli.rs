@@ -23,6 +23,13 @@ pub enum Commands {
         directory: String,
         separator: String,
     },
+    #[command(about = "Remove broken dotsym symlinks whose target no longer exists in the dotfiles repo")]
+    Clean {
+        #[arg(short = 'n', long, help = "Show what would be removed without deleting anything")]
+        dry_run: bool,
+        #[arg(short = 'y', long, help = "Don't prompt; delete all dangling symlinks found")]
+        yes: bool,
+    },
     #[command(about = "Move a file/dir into the dotfiles repo and symlink it back, so it can be managed by dotsym")]
     Dotsymize {
         #[arg(help = "Path of the file or directory to bring under dotsym management")]

@@ -37,6 +37,17 @@ pub struct SymlinkMapping {
     pub destination: PathBuf,
 }
 
+/// A broken symlink found in a directory the current dotsym structure references,
+/// pointing somewhere inside the dotfiles repo whose target no longer exists.
+/// These are the symlinks the `clean` command offers to remove.
+#[derive(Debug, Clone)]
+pub struct DanglingSymlink {
+    /// The symlink itself (the path that would be removed).
+    pub link_path: PathBuf,
+    /// The (absolute, lexically-normalized) target it points to, now missing.
+    pub target: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 pub enum SymlinkOperation {
     CreateSymlink(SymlinkMapping),
@@ -192,17 +203,7 @@ impl DotsymContext {
             cwd.join(expanded)
         };
 
-        let mut out = PathBuf::new();
-        for component in absolute.components() {
-            match component {
-                Component::ParentDir => {
-                    out.pop();
-                }
-                Component::CurDir => {}
-                other => out.push(other.as_os_str()),
-            }
-        }
-        out
+        logical_normalize(&absolute)
     }
 
     /// Given the (already resolved, absolute) path of a file or directory the
@@ -385,6 +386,89 @@ impl DotsymContext {
         }
 
         Ok(mappings)
+    }
+
+    /// Find symlinks that dotsym most likely created but which are now broken.
+    ///
+    /// It scans the directories where the current dotsym structure makes links
+    /// (the parents of every symlink mapping for this host) and returns the
+    /// symlinks there that:
+    ///   * are actual symlinks (regular files/directories are never considered),
+    ///   * point somewhere inside the dotfiles repo, and
+    ///   * have a target that no longer exists.
+    ///
+    /// Symlinks pointing outside the dotfiles repo, and symlinks whose target
+    /// still resolves, are deliberately left alone.
+    pub fn find_dangling_symlinks(&self) -> Result<Vec<DanglingSymlink>, DotsymError> {
+        let mappings = self.get_symlink_mappings()?;
+        let config_dir = logical_normalize(&self.config_dir());
+
+        // The directories where dotsym creates links are the parents of every
+        // mapping source. Collect the unique, existing ones.
+        let mut link_dirs: Vec<PathBuf> = Vec::new();
+        let mut seen = HashSet::new();
+        for mapping in &mappings {
+            if let Some(parent) = mapping.source.parent() {
+                let parent = parent.to_path_buf();
+                if seen.insert(parent.clone()) {
+                    link_dirs.push(parent);
+                }
+            }
+        }
+        link_dirs.sort();
+
+        let mut dangling = Vec::new();
+        for dir in link_dirs {
+            if !dir.is_dir() {
+                continue;
+            }
+
+            for entry in fs::read_dir(&dir).map_err(|e| DotsymError::DirectoryTraversal {
+                path: dir.clone(),
+                source: e,
+            })? {
+                let entry = entry.map_err(|e| DotsymError::DirectoryTraversal {
+                    path: dir.clone(),
+                    source: e,
+                })?;
+                let link_path = entry.path();
+
+                // Only consider symlinks; never touch regular files or directories.
+                let Ok(metadata) = fs::symlink_metadata(&link_path) else {
+                    continue;
+                };
+                if !metadata.file_type().is_symlink() {
+                    continue;
+                }
+
+                // Read the target and make it absolute relative to the link's dir.
+                let Ok(raw_target) = fs::read_link(&link_path) else {
+                    continue;
+                };
+                let abs_target = if raw_target.is_absolute() {
+                    raw_target
+                } else {
+                    dir.join(raw_target)
+                };
+                let target = logical_normalize(&abs_target);
+
+                // Only symlinks pointing into the dotfiles repo are ours to clean.
+                if !target.starts_with(&config_dir) {
+                    continue;
+                }
+
+                // Only broken ones. `Path::exists` follows the link, so it is
+                // false exactly when the target no longer resolves.
+                if link_path.exists() {
+                    continue;
+                }
+
+                dangling.push(DanglingSymlink { link_path, target });
+            }
+        }
+
+        dangling.sort_by(|a, b| a.link_path.cmp(&b.link_path));
+        Ok(dangling)
     }
 
     pub fn generate_backup_path(&self, original_path: &Path) -> PathBuf {
@@ -579,4 +663,21 @@ impl DotsymContext {
             }
         }
     }
+}
+
+/// Lexically normalize a path (resolve `.` and `..` without touching the
+/// filesystem or following symlinks). Used to compare paths and to resolve
+/// the targets of (possibly broken) symlinks.
+fn logical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }

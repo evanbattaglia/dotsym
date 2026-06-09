@@ -8,7 +8,7 @@ mod context;
 mod error;
 
 use cli::{Cli, Commands};
-use commands::{apply_command, dotsymize_command, preview_command, setup_command};
+use commands::{apply_command, clean_command, dotsymize_command, preview_command, setup_command};
 use config::load_config;
 use context::DotsymContext;
 
@@ -30,6 +30,12 @@ fn main() -> AnyhowResult<()> {
         }
         Commands::Setup { directory, separator } => {
             setup_command(directory, separator)
+        }
+        Commands::Clean { dry_run, yes } => {
+            let config = load_config()?;
+            let context = DotsymContext::new(config, None, None)
+                .context("Failed to initialize dotsym context")?;
+            clean_command(&context, dry_run, yes)
         }
         Commands::Dotsymize { path, dry_run, yes } => {
             let config = load_config()?;
@@ -1650,6 +1656,93 @@ dir = "~/dotfiles"
         ));
         // The target must be left untouched (still a regular file, not a symlink).
         assert!(!target.is_symlink());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_dangling_symlinks_basic() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+        let dotfiles_dir = temp_dir.path();
+        let home_path = home_dir.path();
+
+        // A repo file so the home directory becomes a directory the structure
+        // references (the literal dir "__" maps to home).
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+
+        // 1. Broken symlink pointing into the repo -> should be found.
+        let removed_target = dotfiles_dir.join("dotsym/__/__removed");
+        unix_fs::symlink(&removed_target, home_path.join(".dangling"))?;
+
+        // 2. Valid symlink pointing into the repo -> should be ignored.
+        unix_fs::symlink(dotfiles_dir.join("dotsym/__/__gitconfig"), home_path.join(".valid"))?;
+
+        // 3. Broken symlink pointing OUTSIDE the repo -> should be ignored.
+        unix_fs::symlink(home_path.join("nowhere/nope"), home_path.join(".outside"))?;
+
+        // 4. A regular file -> should never be considered.
+        File::create(home_path.join(".realfile"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_path.to_path_buf()));
+
+        let dangling = context.find_dangling_symlinks()?;
+
+        assert_eq!(dangling.len(), 1, "Only the in-repo broken symlink should be found: {:?}", dangling);
+        let found = &dangling[0];
+        assert!(found.link_path.ends_with(".dangling"));
+        assert_eq!(found.target, removed_target);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_dangling_symlinks_none_when_clean() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+        let dotfiles_dir = temp_dir.path();
+        let home_path = home_dir.path();
+
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+
+        // A correctly-applied symlink (target exists) must not be reported.
+        unix_fs::symlink(dotfiles_dir.join("dotsym/__/__gitconfig"), home_path.join(".gitconfig"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_path.to_path_buf()));
+
+        let dangling = context.find_dangling_symlinks()?;
+        assert!(dangling.is_empty(), "No dangling symlinks expected: {:?}", dangling);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_dangling_symlinks_relative_target() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+        let dotfiles_dir = temp_dir.path();
+        let home_path = home_dir.path();
+
+        fs::create_dir_all(dotfiles_dir.join("dotsym/__"))?;
+        File::create(dotfiles_dir.join("dotsym/__/__gitconfig"))?;
+
+        // A relative broken symlink resolving (relative to home) into the repo.
+        let rel_target = PathBuf::from("../")
+            .join(dotfiles_dir.file_name().unwrap())
+            .join("dotsym/__/__removed");
+        // Place the link in home; relative target is resolved against home.
+        unix_fs::symlink(&rel_target, home_path.join(".relcfg"))?;
+
+        let config = create_test_config("__", dotfiles_dir.to_str().unwrap());
+        let context = create_test_context(config, Some("testhost".to_string()), Some(home_path.to_path_buf()));
+
+        let dangling = context.find_dangling_symlinks()?;
+        assert_eq!(dangling.len(), 1, "Relative in-repo broken symlink should be found: {:?}", dangling);
+        assert!(dangling[0].link_path.ends_with(".relcfg"));
 
         Ok(())
     }

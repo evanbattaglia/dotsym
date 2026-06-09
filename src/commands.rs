@@ -238,6 +238,115 @@ fn prompt_choice(count: usize) -> AnyhowResult<Option<usize>> {
     }
 }
 
+pub fn clean_command(context: &DotsymContext, dry_run: bool, yes: bool) -> AnyhowResult<()> {
+    let config_dir = context.config_dir();
+
+    let dangling = context.find_dangling_symlinks()
+        .context("Failed to scan for dangling symlinks")?;
+
+    if dangling.is_empty() {
+        println!("No dangling dotsym symlinks found.");
+        print_clean_caveat();
+        return Ok(());
+    }
+
+    println!(
+        "Found {} dangling symlink(s) pointing into the dotfiles repo ({}):",
+        dangling.len(),
+        config_dir.display()
+    );
+    println!();
+    for d in &dangling {
+        println!("  {} -> {} (target missing)", d.link_path.display(), d.target.display());
+    }
+    println!();
+
+    if dry_run {
+        println!("Dry run - nothing was deleted. Re-run without --dry-run to remove these symlinks.");
+        print_clean_caveat();
+        return Ok(());
+    }
+
+    let proceed = if yes {
+        true
+    } else {
+        prompt_yes_no(&format!("Delete {} symlink(s)?", dangling.len()))?
+    };
+
+    if !proceed {
+        println!("Cancelled. No symlinks were deleted.");
+        print_clean_caveat();
+        return Ok(());
+    }
+
+    let mut deleted = 0;
+    for d in &dangling {
+        // Re-verify right before removing: it must still be a symlink and still
+        // be broken, so we never delete something that changed underneath us and
+        // never remove a regular file.
+        let still_dangling = fs::symlink_metadata(&d.link_path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+            && !d.link_path.exists();
+
+        if !still_dangling {
+            println!("Skipped (changed since scan): {}", d.link_path.display());
+            continue;
+        }
+
+        match fs::remove_file(&d.link_path) {
+            Ok(()) => {
+                println!("Deleted: {}", d.link_path.display());
+                deleted += 1;
+            }
+            Err(e) => {
+                eprintln!("Failed to delete {}: {}", d.link_path.display(), e);
+            }
+        }
+    }
+
+    println!();
+    println!("Deleted {} of {} symlink(s).", deleted, dangling.len());
+    print_clean_caveat();
+
+    Ok(())
+}
+
+/// Prompt for a yes/no answer, defaulting to "no" on an empty line or EOF.
+fn prompt_yes_no(question: &str) -> AnyhowResult<bool> {
+    loop {
+        print!("{} [y/N]: ", question);
+        std::io::stdout().flush().ok();
+
+        let mut line = String::new();
+        let n = std::io::stdin().read_line(&mut line).context("Failed to read input")?;
+        if n == 0 {
+            // EOF
+            return Ok(false);
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("n") || trimmed.eq_ignore_ascii_case("no") {
+            return Ok(false);
+        }
+        if trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes") {
+            return Ok(true);
+        }
+        println!("Please answer y or n.");
+    }
+}
+
+/// Remind the user that `clean` only inspects locations the *current* dotsym
+/// structure points at, so links orphaned by deleting whole repo directories
+/// won't be discovered here.
+fn print_clean_caveat() {
+    println!();
+    println!("Note: clean only looks in directories referenced by the current dotsym");
+    println!("directory structure. If you deleted whole directories from that structure,");
+    println!("there may still be dangling symlinks in locations that are no longer");
+    println!("referenced; those are not detected here and must be removed manually.");
+}
+
 pub fn setup_command(directory: String, separator: String) -> AnyhowResult<()> {
     setup_command_with_home_dir(Some(directory), Some(separator), None)
 }
