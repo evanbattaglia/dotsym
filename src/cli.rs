@@ -19,8 +19,11 @@ pub enum Commands {
         #[arg(help = "Optional filter path: host_dir, host_dir/literal_dir, or host_dir/literal_dir/symlink")]
         path: Option<String>,
     },
+    #[command(about = "Bootstrap dotsym by creating the config symlink in ~/.config/dotsym/dotsym.toml")]
     Setup {
+        #[arg(help = "Path to the dotfiles directory (default: ~/dotfiles)")]
         directory: String,
+        #[arg(help = "Separator used in directory names (default: __)")]
         separator: String,
     },
     #[command(about = "Remove broken dotsym symlinks whose target no longer exists in the dotfiles repo")]
