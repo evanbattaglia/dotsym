@@ -6,7 +6,7 @@ use std::os::unix::fs as unix_fs;
 use std::path::PathBuf;
 
 use crate::config::Config;
-use crate::context::{DotsymContext, DotsymizeCandidate};
+use crate::context::{DotsymContext, DotsymizeCandidate, SymlinkMapping};
 
 pub fn preview_command(context: &DotsymContext) -> AnyhowResult<()> {
     let mappings = context.get_symlink_mappings()
@@ -347,43 +347,69 @@ fn print_clean_caveat() {
     println!("referenced; those are not detected here and must be removed manually.");
 }
 
-pub fn setup_command(directory: String, separator: String) -> AnyhowResult<()> {
-    setup_command_with_home_dir(Some(directory), Some(separator), None)
+pub fn setup_command(directory: String, separator: String, hostname: Option<String>) -> AnyhowResult<()> {
+    setup_command_with_home_dir(Some(directory), Some(separator), hostname, None)
 }
 
-pub fn setup_command_with_home_dir(directory: Option<String>, separator: Option<String>, home_dir_override: Option<PathBuf>) -> AnyhowResult<()> {
+pub fn setup_command_with_home_dir(directory: Option<String>, separator: Option<String>, hostname: Option<String>, home_dir_override: Option<PathBuf>) -> AnyhowResult<()> {
     let separator = separator.unwrap_or_else(|| "__".to_string());
     let directory = directory.unwrap_or_else(|| "~/dotfiles".to_string());
 
     println!("Setting up dotsym with:");
     println!("  Directory: {}", directory);
     println!("  Separator: {}", separator);
+    if let Some(ref h) = hostname {
+        println!("  Hostname:  {}", h);
+    }
     println!();
 
     // Create temporary config for setup
     let temp_config = Config {
         separator: separator.clone(),
         dir: directory.clone(),
+        hostname: None,
     };
 
-    let context = DotsymContext::new(temp_config, None, home_dir_override)
+    let context = DotsymContext::new(temp_config, hostname.clone(), home_dir_override)
         .context("Failed to initialize dotsym context")?;
+
+    if hostname.is_none() {
+        match context.hostname.to_lowercase().as_str() {
+            "localhost" | "localhost.localdomain" | "(none)" | "unknown" => {
+                println!("⚠  Detected hostname is '{}' — this appears to be a generic/default value.", context.hostname);
+                println!("   If you manage dotfiles across multiple machines, consider creating a");
+                println!("   host-specific config, then run 'dotsym setup --hostname <name>' to link it.");
+                println!("   For example:");
+                println!("     mkdir -p {}/<name>/__config__dotsym", directory);
+                println!("     # create dotsym.toml inside it, then:");
+                println!("     dotsym setup --hostname <name>");
+                println!();
+            }
+            _ => {}
+        }
+    }
 
     // Get all mappings and find the dotsym.toml file
     let mappings = context.get_symlink_mappings()
         .context("Failed to generate symlink mappings")?;
 
-    // Look for dotsym.toml in the mappings
-    let dotsym_config_mapping = mappings.iter()
-        .find(|mapping| {
-            mapping.source.file_name()
-                .map(|name| name == "dotsym.toml")
-                .unwrap_or(false) &&
-            mapping.source.parent()
-                .and_then(|parent| parent.file_name())
-                .map(|name| name == "dotsym")
-                .unwrap_or(false)
-        });
+    // Look for dotsym.toml in the mappings — prefer a host-specific one if given
+    let is_dotsym_config = |m: &&SymlinkMapping| -> bool {
+        m.source.file_name()
+            .map(|name| name == "dotsym.toml")
+            .unwrap_or(false) &&
+        m.source.parent()
+            .and_then(|parent| parent.file_name())
+            .map(|name| name == "dotsym")
+            .unwrap_or(false)
+    };
+
+    let dotsym_config_mapping = hostname.as_ref()
+        .and_then(|h| {
+            let pattern = format!("/{}/", h);
+            mappings.iter().find(|m| is_dotsym_config(m) && m.destination.to_string_lossy().contains(&pattern))
+        })
+        .or_else(|| mappings.iter().find(is_dotsym_config));
 
     match dotsym_config_mapping {
         Some(mapping) => {
@@ -403,6 +429,16 @@ pub fn setup_command_with_home_dir(directory: Option<String>, separator: Option<
                         "Config file separator mismatch:\n  Command line: '{}'\n  Config file:  '{}'\n\nPlease ensure the separator argument matches the config file.",
                         separator, found_config.separator
                     ));
+                }
+
+                // Validate hostname if both CLI and config specify one
+                if let (Some(cli_hostname), Some(config_hostname)) = (&hostname, &found_config.hostname) {
+                    if cli_hostname != config_hostname {
+                        return Err(anyhow::anyhow!(
+                            "Config file hostname mismatch:\n  Command line: '{}'\n  Config file:  '{}'\n\nPlease ensure the --hostname argument matches the config file.",
+                            cli_hostname, config_hostname
+                        ));
+                    }
                 }
 
                 // Validate directory (expand ~ for comparison)
@@ -490,7 +526,10 @@ pub fn setup_command_with_home_dir(directory: Option<String>, separator: Option<
             println!();
             println!("Expected to find a file like:");
             println!("  {}/dotsym/__config__dotsym/dotsym.toml", directory);
-            println!("  {}/$(hostname)/__config__dotsym/dotsym.toml", directory);
+            match &hostname {
+                Some(h) => println!("  {}/{}/__config__dotsym/dotsym.toml", directory, h),
+                None => println!("  {}/$(hostname)/__config__dotsym/dotsym.toml", directory),
+            }
             println!("  etc.");
             println!();
             println!("Please create a dotsym.toml file in your dotfiles directory first.");

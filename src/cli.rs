@@ -10,9 +10,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    #[command(about = "Preview which symlinks would be created without making any changes")]
     Preview,
+    #[command(about = "Create symlinks for all dotfiles managed by dotsym, backing up any conflicts")]
     Apply {
-        #[arg(short = 'n', long)]
+        #[arg(short = 'n', long, help = "Show what would be created without actually writing any files")]
         dry_run: bool,
         #[arg(long, help = "Skip backing up existing symlinks (files and directories are still backed up)")]
         no_backup_existing_symlinks: bool,
@@ -25,6 +27,8 @@ pub enum Commands {
         directory: String,
         #[arg(help = "Separator used in directory names (default: __)")]
         separator: String,
+        #[arg(long, help = "Override the hostname used to find a host-specific dotsym.toml")]
+        hostname: Option<String>,
     },
     #[command(about = "Remove broken dotsym symlinks whose target no longer exists in the dotfiles repo")]
     Clean {

@@ -28,8 +28,8 @@ fn main() -> AnyhowResult<()> {
                 .context("Failed to initialize dotsym context")?;
             apply_command(&context, dry_run, no_backup_existing_symlinks, path)
         }
-        Commands::Setup { directory, separator } => {
-            setup_command(directory, separator)
+        Commands::Setup { directory, separator, hostname } => {
+            setup_command(directory, separator, hostname)
         }
         Commands::Clean { dry_run, yes } => {
             let config = load_config()?;
@@ -62,6 +62,7 @@ mod tests {
         Config {
             separator: separator.to_string(),
             dir: dir.to_string(),
+            hostname: None,
         }
     }
 
@@ -306,7 +307,7 @@ mod tests {
         let result = if !config_path.exists() {
             Err(DotsymError::ConfigNotFound { path: config_path })
         } else {
-            Ok(Config { separator: "__".to_string(), dir: "~/test".to_string() })
+            Ok(Config { separator: "__".to_string(), dir: "~/test".to_string(), hostname: None })
         };
 
         assert!(result.is_err());
@@ -788,7 +789,7 @@ dir = "{}"
         fs::write(dotfiles_dir.join("dotsym/__config__dotsym/dotsym.toml"), config_content)?;
 
         // Test setup command
-        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), None, Some(home_dir.clone()));
+        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), None, None, Some(home_dir.clone()));
         assert!(result.is_ok(), "Setup command should succeed");
 
         // Verify symlink was created
@@ -827,7 +828,7 @@ dir = "{}"
         unix_fs::symlink(&expected_target, &config_symlink)?;
 
         // Test setup command - should succeed and do nothing
-        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), None, Some(home_dir.clone()));
+        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), None, None, Some(home_dir.clone()));
         assert!(result.is_ok(), "Setup command should succeed when symlink already exists correctly");
 
         // Verify symlink still exists and is correct
@@ -848,7 +849,7 @@ dir = "{}"
         fs::create_dir_all(&empty_dotfiles_dir)?;
 
         // Test setup command - should fail
-        let result = setup_command_with_home_dir(Some(empty_dotfiles_dir.to_string_lossy().to_string()), None, Some(home_dir.clone()));
+        let result = setup_command_with_home_dir(Some(empty_dotfiles_dir.to_string_lossy().to_string()), None, None, Some(home_dir.clone()));
         assert!(result.is_err(), "Setup command should fail when no config is found");
 
         let error_msg = format!("{}", result.unwrap_err());
@@ -878,7 +879,7 @@ dir = "{}"
         unix_fs::symlink(&wrong_target, &config_symlink)?;
 
         // Test setup command - should fail with helpful message
-        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), None, Some(home_dir.clone()));
+        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), None, None, Some(home_dir.clone()));
         assert!(result.is_err(), "Setup command should fail when wrong symlink exists");
 
         let error_msg = format!("{}", result.unwrap_err());
@@ -901,7 +902,7 @@ dir = "{}"
         fs::write(dotfiles_dir.join("dotsym/--config--dotsym/dotsym.toml"), config_content)?;
 
         // Test setup command with custom separator
-        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), Some("--".to_string()), Some(home_dir.clone()));
+        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), Some("--".to_string()), None, Some(home_dir.clone()));
         assert!(result.is_ok(), "Setup command should succeed with custom separator");
 
         // Verify symlink was created
@@ -930,7 +931,7 @@ dir = "{}"
         fs::write(dotfiles_dir.join("dotsym/__config__dotsym/dotsym.toml"), config_content)?;
 
         // Test setup command with mismatched separator
-        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), Some("__".to_string()), Some(home_dir.clone()));
+        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), Some("__".to_string()), None, Some(home_dir.clone()));
         assert!(result.is_err(), "Setup command should fail with separator mismatch");
 
         let error_msg = format!("{}", result.unwrap_err());
@@ -956,7 +957,7 @@ dir = "{}"
         fs::write(dotfiles_dir.join("dotsym/__config__dotsym/dotsym.toml"), config_content)?;
 
         // Test setup command with mismatched directory
-        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), Some("__".to_string()), Some(home_dir.clone()));
+        let result = setup_command_with_home_dir(Some(dotfiles_dir.to_string_lossy().to_string()), Some("__".to_string()), None, Some(home_dir.clone()));
         assert!(result.is_err(), "Setup command should fail with directory mismatch");
 
         let error_msg = format!("{}", result.unwrap_err());
@@ -981,7 +982,7 @@ dir = "~/dotfiles"
         fs::write(dotfiles_dir.join("dotsym/__config__dotsym/dotsym.toml"), config_content)?;
 
         // Test setup command with tilde expansion
-        let result = setup_command_with_home_dir(Some("~/dotfiles".to_string()), Some("__".to_string()), Some(home_dir.clone()));
+        let result = setup_command_with_home_dir(Some("~/dotfiles".to_string()), Some("__".to_string()), None, Some(home_dir.clone()));
         assert!(result.is_ok(), "Setup command should succeed with matching tilde expansion");
 
         // Verify symlink was created

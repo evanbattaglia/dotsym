@@ -82,14 +82,16 @@ pub struct DotsymContext {
 
 impl DotsymContext {
     pub fn new(config: Config, hostname: Option<String>, home_dir: Option<PathBuf>) -> Result<Self, DotsymError> {
-        let hostname = hostname.unwrap_or_else(|| {
-            std::process::Command::new("hostname")
-                .output()
-                .ok()
-                .and_then(|output| String::from_utf8(output.stdout).ok())
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|| "unknown".to_string())
-        });
+        let hostname = hostname
+            .or_else(|| config.hostname.clone())
+            .unwrap_or_else(|| {
+                std::process::Command::new("hostname")
+                    .output()
+                    .ok()
+                    .and_then(|output| String::from_utf8(output.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            });
 
         let home_dir = match home_dir {
             Some(dir) => dir,

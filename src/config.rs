@@ -8,6 +8,8 @@ use crate::error::DotsymError;
 pub struct Config {
     pub separator: String,
     pub dir: String,
+    #[serde(default)]
+    pub hostname: Option<String>,
 }
 
 pub fn load_config() -> AnyhowResult<Config> {
