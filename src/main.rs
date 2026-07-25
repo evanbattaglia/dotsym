@@ -580,7 +580,7 @@ mod tests {
 
         // Find the gitconfig mapping
         let gitconfig_mapping = mappings.iter()
-            .find(|m| m.destination.to_string_lossy().contains("__gitconfig"))
+            .find(|m| m.destination.to_string_lossy().ends_with("__gitconfig"))
             .expect("Should find gitconfig mapping");
 
         // Now delete the file and try to analyze the symlink
